@@ -1,0 +1,52 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r server/requirements.txt
+      - run: python -m pytest -q
+        working-directory: server
+
+  tablet-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - name: Build APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk rosey-cherry.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rosey-cherry-apk
+          path: rosey-cherry.apk
+      - name: Publish to the "tablet-latest" release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view tablet-latest >/dev/null 2>&1 || \
+            gh release create tablet-latest --title "Rosey-Cherry tablet app (latest)" \
+              --notes "Built automatically from main. Install with scripts/install_tablet.sh" --prerelease
+          gh release upload tablet-latest rosey-cherry.apk --clobber

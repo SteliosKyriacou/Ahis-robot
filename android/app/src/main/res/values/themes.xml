@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="RoseyTheme" parent="android:Theme.Material.Light.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/rosey_bg</item>
+        <item name="android:statusBarColor">@color/rosey_bg</item>
+        <item name="android:navigationBarColor">@color/rosey_bg</item>
+    </style>
+    <color name="rosey_bg">#FFF3F6</color>
+</resources>

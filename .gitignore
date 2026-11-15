@@ -1,0 +1,7 @@
+.DS_Store
+.apk/
+server/.venv/
+server/.env
+server/logs/
+__pycache__/
+.pytest_cache/
