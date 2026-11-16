@@ -54,7 +54,9 @@ class MainActivity : Activity() {
     private var ttsReady = false
     private var state = State.PAUSED
     private var greeted = false
-    private var preferOffline = true
+    // Google's online recognizer is much better with small children's voices than the offline one.
+    private var preferOffline = false
+    private var questionDeadline = 0L
     private var musicMuted = false
     private val afterSpeech = mutableMapOf<String, () -> Unit>()
     private var utteranceCounter = 0
@@ -239,8 +241,9 @@ class MainActivity : Activity() {
             if (preferOffline) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             if (forQuestion) {
                 // Little kids pause a lot while thinking; give her time.
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 4000L)
             }
         }
 
@@ -254,12 +257,25 @@ class MainActivity : Activity() {
         startRecognizer(forQuestion = false)
     }
 
+    /** Listen for what Ahilya says. Keeps listening through pauses for [QUESTION_WINDOW_MS]. */
     private fun listenForQuestion() {
         state = State.QUESTION
+        questionDeadline = System.currentTimeMillis() + QUESTION_WINDOW_MS
         face.activity = FaceView.Activity.LISTENING
         setStatus("Listening...")
         setMusicMuted(false)
-        startRecognizer(forQuestion = true)
+        // A soft "ding" tells her it's her turn; start listening right after so it isn't heard.
+        Chime.play()
+        main.postDelayed({ if (state == State.QUESTION) startRecognizer(forQuestion = true) }, Chime.LENGTH_MS + 60)
+    }
+
+    /** Nothing heard yet: keep listening until the window is over, then go back to waiting for her name. */
+    private fun keepListeningOrGiveUp() {
+        if (System.currentTimeMillis() < questionDeadline) {
+            main.postDelayed({ if (state == State.QUESTION) startRecognizer(forQuestion = true) }, 80)
+        } else {
+            listenForWakeWord()
+        }
     }
 
     private fun startRecognizer(forQuestion: Boolean) {
@@ -277,7 +293,7 @@ class MainActivity : Activity() {
         main.postDelayed({
             when (state) {
                 State.WAKE -> listenForWakeWord()
-                State.QUESTION -> listenForQuestion()
+                State.QUESTION -> startRecognizer(forQuestion = true)
                 else -> {}
             }
         }, delayMs)
@@ -286,9 +302,14 @@ class MainActivity : Activity() {
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
         override fun onBeginningOfSpeech() {}
-        override fun onRmsChanged(rmsdB: Float) {}
+        override fun onRmsChanged(rmsdB: Float) {
+            // Roughly -2 dB (quiet) .. 10 dB (loud) -> 0..1, so the glow grows when she talks.
+            face.voiceLevel = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+        }
         override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() {}
+        override fun onEndOfSpeech() {
+            face.voiceLevel = 0f
+        }
         override fun onPartialResults(partialResults: Bundle?) {}
         override fun onEvent(eventType: Int, params: Bundle?) {}
 
@@ -299,7 +320,7 @@ class MainActivity : Activity() {
                 State.WAKE -> onWakeResults(heard)
                 State.QUESTION -> {
                     val text = heard.firstOrNull()?.trim().orEmpty()
-                    if (text.isEmpty()) listenForWakeWord() else ask(stripName(text).ifBlank { text })
+                    if (text.isEmpty()) keepListeningOrGiveUp() else ask(stripName(text).ifBlank { text })
                 }
                 else -> {}
             }
@@ -310,8 +331,8 @@ class MainActivity : Activity() {
             Log.d(tag, "recognizer error $error in $state")
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                    // Nothing said. In a conversation, quietly go back to waiting for her name.
-                    if (state == State.QUESTION) listenForWakeWord() else retryListening(150)
+                    // Nothing said (yet). Little kids take a while to start: keep listening a bit longer.
+                    if (state == State.QUESTION) keepListeningOrGiveUp() else retryListening(100)
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
                     requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY, SpeechRecognizer.ERROR_CLIENT, 11 /* server disconnected */ -> {
@@ -658,10 +679,11 @@ class MainActivity : Activity() {
     companion object {
         /** Ways speech recognition tends to spell "Rosey-Cherry" when a 4-year-old says it. */
         val NAME = Regex(
-            "\\b(rosey|rosie|rosy|rosi|rosee|rose|roses|rosa|cherry|cherie|cheri|sherry|" +
-                "roseycherry|rosiecherry|rosycherry)\\b",
+            "\\b(ro[sz](e|ey|ie|y|i|ee|a|ies|ys|es|ey's|ie's)?|roxy|rosary|cherr?(y|ie|i|ies|ys)|cheri[es]?|" +
+                "sherr?(y|ie|i)|chary|jerry|cheery|ro[sz](ey|ie|y)cherr?(y|ie|i))\\b",
             RegexOption.IGNORE_CASE,
         )
+        const val QUESTION_WINDOW_MS = 10_000L
         private val GREETING = Regex("^(hey|hi|hello|hiya|ok|okay|oh)\\b[\\s,.!]*", RegexOption.IGNORE_CASE)
 
         const val GOOGLE_TTS = "com.google.android.tts"

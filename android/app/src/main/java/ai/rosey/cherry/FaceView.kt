@@ -28,6 +28,11 @@ class FaceView @JvmOverloads constructor(
     var mood: String = "happy"
     var activity: Activity = Activity.IDLE
 
+    /** How loud Ahilya is right now (0..1); the listening glow grows with it. */
+    var voiceLevel: Float = 0f
+        set(value) { field = value; if (value > shownLevel) shownLevel = value }
+    private var shownLevel = 0f
+
     private val start = SystemClock.uptimeMillis()
     private var nextBlink = start + 2500L
     private var blinkStart = 0L
@@ -67,14 +72,20 @@ class FaceView @JvmOverloads constructor(
         val cy = height / 2f + r * 0.28f + sin(t * 2f) * r * bobAmp
 
         // Listening: soft pulsing rings around the head.
+        shownLevel = maxOf(voiceLevel, shownLevel * 0.9f) // smooth fall-off
         if (activity == Activity.LISTENING) {
+            // Solid halo that swells with her voice, so she can see Rosey hearing her.
+            fill.color = listenGlow
+            fill.alpha = (70 + 120 * shownLevel).toInt()
+            canvas.drawCircle(cx, cy, r * (1.04f + 0.22f * shownLevel), fill)
             for (i in 0..2) {
                 val phase = ((t * 0.8f) + i / 3f) % 1f
-                fill.color = listenGlow
                 fill.alpha = ((1f - phase) * 90).toInt()
-                canvas.drawCircle(cx, cy, r * (1.02f + phase * 0.35f), fill)
+                canvas.drawCircle(cx, cy, r * (1.02f + phase * 0.35f + 0.2f * shownLevel), fill)
             }
             fill.alpha = 255
+        } else {
+            shownLevel = 0f
         }
 
         drawStemAndLeaf(canvas, cx, cy, r, t)
