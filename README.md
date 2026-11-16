@@ -97,6 +97,32 @@ cd android && gradle assembleDebug
 
 Then `./scripts/install_tablet.sh ...` will pick up `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+## 3. Optional: give Rosey a grown-up's voice
+
+Rosey can speak in a clone of a parent's voice, made **locally on the server** with the open-source
+XTTS-v2 model (nothing is sent to a cloud service). On the server:
+
+```bash
+sudo apt install ffmpeg
+```
+
+```bash
+./scripts/install_voice.sh
+```
+
+This installs the model software (~3 GB), downloads the audio of the "Stories for my daughter" playlist,
+cuts ~40 seconds of clean voice into `server/voice/` (git-ignored: the recordings never go into this
+public repo), makes `server/voice/preview.wav` to listen to, and restarts the server with the voice on.
+The first run shows the model's licence (Coqui Public Model Licence, non-commercial use) for you to accept.
+
+Not happy with the sample? Pick exact clips (`--clip 3:40.5-52` = video 3, 40.5 s to 52 s) or use your own
+recording (`--from-file me.wav`, 1–2 minutes of you reading, no music). See `python -m rosey.voice_setup --help`.
+
+Speech is made one sentence at a time, so Rosey starts talking after the first sentence is ready while the
+rest are generated. Without a graphics card expect a few seconds per sentence. If the voice isn't ready or
+fails, the tablet uses its own built-in voice. Settings in `server/.env`: `ROSEY_VOICE=1`,
+`ROSEY_VOICE_SPEED` (1.0), `ROSEY_VOICE_THREADS`.
+
 ## Using Rosey-Cherry
 
 - Say **"Rosey-Cherry"** (or "Hey Rosie") – she says "Yes, Ahilya?" and her face glows blue while listening.

@@ -1,0 +1,3 @@
+# Rosey's cloned voice (installed by scripts/install_voice.sh; torch is installed first, CPU build)
+coqui-tts>=0.24
+yt-dlp

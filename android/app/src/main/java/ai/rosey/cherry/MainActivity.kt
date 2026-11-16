@@ -61,6 +61,9 @@ class MainActivity : Activity() {
         baseUrl = { prefs.getString("server_url", "") ?: "" },
         token = { prefs.getString("token", "") ?: "" },
     )
+    private val voice by lazy { VoicePlayer(this, client) }
+    private var serverVoice = false
+    private var speechToken = 0
 
     // ---------------------------------------------------------------- lifecycle
 
@@ -122,6 +125,7 @@ class MainActivity : Activity() {
         main.removeCallbacksAndMessages(null)
         recognizer?.cancel()
         tts?.stop()
+        voice.stop()
         setMusicMuted(false)
     }
 
@@ -152,6 +156,7 @@ class MainActivity : Activity() {
             return
         }
         if (recognizer == null) createRecognizer()
+        client.hasVoice { serverVoice = it; Log.i(tag, "server voice: $it") }
         if (ttsReady && !greeted) maybeGreet() else if (ttsReady) listenForWakeWord()
     }
 
@@ -296,32 +301,65 @@ class MainActivity : Activity() {
         setStatus("Thinking about: \"$text\"")
         client.ask(
             text,
-            onReply = { mood, reply ->
+            onReply = { mood, reply, audio ->
                 if (state == State.PAUSED) return@ask
+                serverVoice = audio.isNotEmpty()  // the voice may come online (or go away) while running
                 if (reply.isBlank()) {
                     speak("happy", "Hmm, can you ask me that again?") { listenForQuestion() }
                 } else {
-                    speak(mood, reply) { listenForQuestion() }
+                    speakReply(mood, reply, audio) { listenForQuestion() }
                 }
             },
             onError = { e ->
                 Log.w(tag, "server error", e)
                 if (state == State.PAUSED) return@ask
-                speak(
-                    "sad",
+                // The server is unreachable, so this one is always in the tablet's own voice.
+                startTalking("sad")
+                ttsSpeak(
                     "Oh no, I can't reach my thinking cloud right now. Can you ask a grown-up to help me?",
                 ) { listenForWakeWord() }
             },
         )
     }
 
-    private fun speak(mood: String, text: String, then: () -> Unit) {
+    private fun startTalking(mood: String) {
         state = State.SPEAKING
         recognizer?.cancel()
         setMusicMuted(false)
         face.mood = mood
         face.activity = FaceView.Activity.TALKING
         setStatus("")
+    }
+
+    /** Say a fixed phrase, in Rosey's own (server) voice when there is one. */
+    private fun speak(mood: String, text: String, then: () -> Unit) {
+        startTalking(mood)
+        if (!serverVoice) {
+            ttsSpeak(text, then)
+            return
+        }
+        val token = ++speechToken
+        client.say(text) { chunks ->
+            if (token != speechToken || state != State.SPEAKING) return@say
+            if (chunks.isEmpty()) ttsSpeak(text, then) else playChunks(chunks, then)
+        }
+    }
+
+    /** Say Rosey's answer: server voice chunks if the server made them, else the tablet's voice. */
+    private fun speakReply(mood: String, text: String, audio: List<SpeechChunk>, then: () -> Unit) {
+        startTalking(mood)
+        if (audio.isEmpty()) ttsSpeak(text, then) else playChunks(audio, then)
+    }
+
+    private fun playChunks(chunks: List<SpeechChunk>, then: () -> Unit) {
+        voice.play(
+            chunks,
+            onDone = { doneTalking(then) },
+            onFail = { rest -> if (rest.isBlank()) doneTalking(then) else ttsSpeak(rest, then) },
+        )
+    }
+
+    private fun ttsSpeak(text: String, then: () -> Unit) {
         val engine = tts
         if (!ttsReady || engine == null) {
             main.postDelayed({ doneTalking(then) }, 1500)
@@ -374,6 +412,7 @@ class MainActivity : Activity() {
             State.SPEAKING -> {
                 // Let her interrupt a long answer.
                 tts?.stop()
+                voice.stop()
                 afterSpeech.clear()
                 face.activity = FaceView.Activity.IDLE
                 listenForQuestion()
@@ -387,6 +426,7 @@ class MainActivity : Activity() {
         state = State.PAUSED
         recognizer?.cancel()
         tts?.stop()
+        voice.stop()
         afterSpeech.clear()
         setMusicMuted(false)
 

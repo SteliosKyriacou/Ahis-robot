@@ -38,3 +38,30 @@ def test_chat_fake_brain():
     body = r.json()
     assert body["mood"] == "happy"
     assert "why is the sky blue" in body["reply"]
+
+
+def test_split_for_speech():
+    from rosey.voice import split_for_speech
+
+    chunks = split_for_speech("Wow! The moon is big. It goes round the Earth. Look up tonight! " + "la " * 120)
+    assert chunks[0] == "Wow!"
+    assert all(len(c) <= 230 for c in chunks)
+    assert " ".join(chunks).replace("  ", " ").startswith("Wow! The moon is big.")
+
+
+def test_voice_chunks_fake_engine():
+    import asyncio
+    import time
+
+    from rosey.voice import Voice
+
+    v = Voice(fake=True)
+    for _ in range(100):
+        if v.ready:
+            break
+        time.sleep(0.02)
+    chunks = v.start("Hello there. How are you today?")
+    assert [c["text"] for c in chunks] == ["Hello there.", "How are you today?"]
+    jid, n = chunks[0]["url"].split("/")[2:4]
+    wav = asyncio.run(v.get(jid, int(n)))
+    assert wav[:4] == b"RIFF"
