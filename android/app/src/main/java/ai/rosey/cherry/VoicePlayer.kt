@@ -21,6 +21,7 @@ class VoicePlayer(private val context: Context, private val client: RoseyClient)
         val chunks: List<SpeechChunk>,
         val onDone: () -> Unit,
         val onFail: (remainingText: String) -> Unit,
+        val onSound: (Boolean) -> Unit,
     ) {
         val files = arrayOfNulls<File>(chunks.size)
         var failedAt = -1
@@ -47,7 +48,7 @@ class VoicePlayer(private val context: Context, private val client: RoseyClient)
             if (next >= chunks.size) { finish(); onDone(); return }
             val f = files[next]
             if (f == null) {
-                if (failedAt == next) fail()
+                if (failedAt == next) fail() else onSound(false)
                 return // wait for the download
             }
             try {
@@ -75,6 +76,7 @@ class VoicePlayer(private val context: Context, private val client: RoseyClient)
                     prepare()
                     start()
                 }
+                onSound(true)
             } catch (e: Exception) {
                 Log.w("Rosey", "voice playback failed", e)
                 player?.release()
@@ -100,9 +102,14 @@ class VoicePlayer(private val context: Context, private val client: RoseyClient)
     }
 
     /** Speak [chunks]. [onFail] gets the text not yet spoken so the tablet's own voice can finish it. */
-    fun play(chunks: List<SpeechChunk>, onDone: () -> Unit, onFail: (remainingText: String) -> Unit) {
+    fun play(
+        chunks: List<SpeechChunk>,
+        onDone: () -> Unit,
+        onFail: (remainingText: String) -> Unit,
+        onSound: (playing: Boolean) -> Unit = {},
+    ) {
         stop()
-        val s = Session(chunks, onDone, onFail)
+        val s = Session(chunks, onDone, onFail, onSound)
         session = s
         Thread {
             for (i in chunks.indices) {

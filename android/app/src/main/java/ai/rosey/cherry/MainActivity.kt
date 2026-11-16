@@ -352,10 +352,20 @@ class MainActivity : Activity() {
     }
 
     private fun playChunks(chunks: List<SpeechChunk>, then: () -> Unit) {
+        // Only move the mouth while sound is actually playing; show thinking dots while waiting.
+        face.activity = FaceView.Activity.THINKING
         voice.play(
             chunks,
             onDone = { doneTalking(then) },
-            onFail = { rest -> if (rest.isBlank()) doneTalking(then) else ttsSpeak(rest, then) },
+            onFail = { rest ->
+                face.activity = FaceView.Activity.TALKING
+                if (rest.isBlank()) doneTalking(then) else ttsSpeak(rest, then)
+            },
+            onSound = { playing ->
+                if (state == State.SPEAKING) {
+                    face.activity = if (playing) FaceView.Activity.TALKING else FaceView.Activity.THINKING
+                }
+            },
         )
     }
 
