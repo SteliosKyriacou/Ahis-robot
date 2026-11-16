@@ -60,10 +60,11 @@ class FaceView @JvmOverloads constructor(
         canvas.drawColor(bg)
 
         val cx = width / 2f
-        val r = min(width, height) * 0.34f
+        // Head + stem + leaf is about 2.6 radii tall: size it to fit both portrait and landscape.
+        val r = min(width * 0.34f, height / 3.1f)
         // Gentle floating bob; bouncier when excited.
         val bobAmp = if (mood == "excited") 0.04f else 0.015f
-        val cy = height / 2f + r * 0.08f + sin(t * 2f) * r * bobAmp
+        val cy = height / 2f + r * 0.28f + sin(t * 2f) * r * bobAmp
 
         // Listening: soft pulsing rings around the head.
         if (activity == Activity.LISTENING) {
