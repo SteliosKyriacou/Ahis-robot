@@ -15,10 +15,25 @@ android {
         versionName = "1.0"
     }
 
+    // One fixed (debug-only) key so every build - local or CI - can update the app on the tablet
+    // without uninstalling it first. Not a secret: it only signs this hobby app.
+    signingConfigs {
+        create("rosey") {
+            storeFile = file("rosey-debug.p12")
+            storePassword = "android"
+            storeType = "pkcs12"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("rosey")
+        }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("rosey")
         }
     }
 
