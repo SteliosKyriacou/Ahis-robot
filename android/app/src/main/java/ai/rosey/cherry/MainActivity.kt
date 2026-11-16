@@ -16,12 +16,14 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import android.text.InputType
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -85,23 +87,73 @@ class MainActivity : Activity() {
         setContentView(root)
         setupTouch()
 
-        tts = TextToSpeech(this) { result ->
-            if (result == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.getDefault()
-                tts?.setPitch(1.35f)
-                tts?.setSpeechRate(0.92f)
-                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(id: String?) {}
-                    override fun onDone(id: String?) = finishedSpeaking(id)
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(id: String?) = finishedSpeaking(id)
-                })
+        initTts { main.post { maybeGreet() } }
+    }
+
+    /** Start the tablet's own speech engine (Google's by default: its voices sound most natural). */
+    private fun initTts(onReady: () -> Unit = {}) {
+        ttsReady = false
+        tts?.shutdown()
+        val wanted = prefs.getString("tts_engine", null) ?: GOOGLE_TTS
+        val engine = if (isInstalled(wanted)) wanted else null
+        var created: TextToSpeech? = null
+        created = TextToSpeech(this, { result ->
+            if (result == TextToSpeech.SUCCESS && created === tts) {
+                created?.let { setupTtsVoice(it) }
                 ttsReady = true
-                main.post { maybeGreet() }
-            } else {
+                onReady()
+            } else if (result != TextToSpeech.SUCCESS) {
                 setStatus("Text-to-speech is not available on this tablet.")
             }
-        }
+        }, engine)
+        tts = created
+    }
+
+    private fun setupTtsVoice(engine: TextToSpeech) {
+        engine.setPitch(prefs.getFloat("tts_pitch", 1.1f))
+        engine.setSpeechRate(prefs.getFloat("tts_rate", 0.95f))
+        val voices = try { engine.voices.orEmpty() } catch (e: Exception) { emptySet() }
+        val saved = prefs.getString("tts_voice", null)
+        val voice = voices.firstOrNull { it.name == saved } ?: bestVoice(voices)
+        if (voice != null) engine.voice = voice else engine.language = Locale.getDefault()
+        Log.i(tag, "tablet voice: ${engine.defaultEngine} / ${voice?.name}")
+        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(id: String?) {}
+            override fun onDone(id: String?) = finishedSpeaking(id)
+            @Deprecated("Deprecated in Java")
+            override fun onError(id: String?) = finishedSpeaking(id)
+        })
+    }
+
+    /** English voices, best first: installed, high quality, same country as the tablet. */
+    private fun englishVoices(engine: TextToSpeech): List<Voice> {
+        val voices = try { engine.voices.orEmpty() } catch (e: Exception) { emptySet() }
+        val country = Locale.getDefault().country
+        return voices
+            .filter { it.locale.language == "en" && !it.features.orEmpty().contains("notInstalled") }
+            .sortedWith(
+                compareByDescending<Voice> { it.quality }
+                    .thenByDescending { it.locale.country == country }
+                    .thenBy { it.locale.country }
+                    .thenBy { it.name }
+            )
+    }
+
+    private fun bestVoice(voices: Set<Voice>): Voice? {
+        val country = Locale.getDefault().country
+        return voices
+            .filter { it.locale.language == "en" && !it.features.orEmpty().contains("notInstalled") }
+            .maxWithOrNull(
+                compareBy<Voice> { it.locale.country == country }
+                    .thenBy { it.quality }
+                    .thenBy { !it.isNetworkConnectionRequired }
+            )
+    }
+
+    private fun isInstalled(pkg: String) = try {
+        packageManager.getPackageInfo(pkg, 0); true
+    } catch (e: Exception) {
+        false
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -334,7 +386,7 @@ class MainActivity : Activity() {
     /** Say a fixed phrase, in Rosey's own (server) voice when there is one. */
     private fun speak(mood: String, text: String, then: () -> Unit) {
         startTalking(mood)
-        if (!serverVoice) {
+        if (!serverVoice || !useServerVoice()) {
             ttsSpeak(text, then)
             return
         }
@@ -348,7 +400,7 @@ class MainActivity : Activity() {
     /** Say Rosey's answer: server voice chunks if the server made them, else the tablet's voice. */
     private fun speakReply(mood: String, text: String, audio: List<SpeechChunk>, then: () -> Unit) {
         startTalking(mood)
-        if (audio.isEmpty()) ttsSpeak(text, then) else playChunks(audio, then)
+        if (audio.isEmpty() || !useServerVoice()) ttsSpeak(text, then) else playChunks(audio, then)
     }
 
     private fun playChunks(chunks: List<SpeechChunk>, then: () -> Unit) {
@@ -458,6 +510,10 @@ class MainActivity : Activity() {
             addView(urlBox)
             addView(TextView(context).apply { text = "Server token" })
             addView(tokenBox)
+            addView(Button(context).apply {
+                text = "Choose tablet voice…"
+                setOnClickListener { showVoicePicker() }
+            })
         }
         AlertDialog.Builder(this)
             .setTitle("Rosey-Cherry settings (grown-ups)")
@@ -475,6 +531,83 @@ class MainActivity : Activity() {
             }
             .show()
     }
+
+    /**
+     * Grown-up voice picker. First choice is the cloned voice made by the server; the rest are the
+     * tablet's own voices. Tap one to hear it, then "Use this voice". The neutral button swaps
+     * between the Google and Samsung speech engines.
+     */
+    private fun showVoicePicker() {
+        val engine = tts ?: return
+        if (!ttsReady) return
+        val voices = englishVoices(engine)
+        val engineName = if (engine.defaultEngine == GOOGLE_TTS) "Google" else "Samsung"
+        val labels = listOf(
+            "★ My cloned voice (made by the server)" + if (serverVoice) "" else "\n(not available right now)"
+        ) + voices.mapIndexed { i, v ->
+            val country = v.locale.displayCountry.ifBlank { v.locale.displayName }
+            val quality = when {
+                v.quality >= Voice.QUALITY_VERY_HIGH -> "very high quality"
+                v.quality >= Voice.QUALITY_HIGH -> "high quality"
+                else -> "normal quality"
+            }
+            val online = if (v.isNetworkConnectionRequired) ", needs internet" else ""
+            "$engineName voice ${i + 1}: English ($country), $quality$online"
+        }
+        val current = if (useServerVoice()) 0
+        else 1 + voices.indexOfFirst { it.name == engine.voice?.name }.coerceAtLeast(0)
+        var chosen = current
+
+        fun stopPreview() {
+            engine.stop()
+            voice.stop()
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Rosey's voice – tap to listen")
+            .setSingleChoiceItems(labels.toTypedArray(), current) { _, which ->
+                chosen = which
+                stopPreview()
+                if (which == 0) {
+                    client.say(PREVIEW) { chunks ->
+                        if (chunks.isEmpty()) {
+                            setStatus("The cloned voice isn't available on the server right now.")
+                        } else {
+                            voice.play(chunks, onDone = {}, onFail = {})
+                        }
+                    }
+                } else {
+                    engine.voice = voices[which - 1]
+                    engine.speak(PREVIEW, TextToSpeech.QUEUE_FLUSH, null, "preview")
+                }
+            }
+            .setPositiveButton("Use this voice") { _, _ ->
+                stopPreview()
+                if (chosen == 0) {
+                    prefs.edit().putBoolean("use_server_voice", true).apply()
+                    setupTtsVoice(engine) // tablet voice stays as the backup
+                } else {
+                    prefs.edit()
+                        .putBoolean("use_server_voice", false)
+                        .putString("tts_voice", voices[chosen - 1].name)
+                        .apply()
+                    engine.voice = voices[chosen - 1]
+                }
+            }
+            .setNegativeButton("Cancel") { _, _ ->
+                stopPreview()
+                setupTtsVoice(engine)
+            }
+            .setNeutralButton(if (engineName == "Google") "Samsung voices" else "Google voices") { _, _ ->
+                stopPreview()
+                val other = if (engineName == "Google") SAMSUNG_TTS else GOOGLE_TTS
+                prefs.edit().putString("tts_engine", other).remove("tts_voice").apply()
+                initTts { main.post { showVoicePicker() } }
+            }
+            .show()
+    }
+
+    private fun useServerVoice() = prefs.getBoolean("use_server_voice", true)
 
     // ---------------------------------------------------------------- helpers
 
@@ -530,6 +663,10 @@ class MainActivity : Activity() {
             RegexOption.IGNORE_CASE,
         )
         private val GREETING = Regex("^(hey|hi|hello|hiya|ok|okay|oh)\\b[\\s,.!]*", RegexOption.IGNORE_CASE)
+
+        const val GOOGLE_TTS = "com.google.android.tts"
+        const val SAMSUNG_TTS = "com.samsung.SMT"
+        const val PREVIEW = "Hi Ahilya! I'm Rosey-Cherry. Shall I tell you a story about a little star?"
 
         val WAKE_REPLIES = listOf(
             "Yes, Ahilya?",

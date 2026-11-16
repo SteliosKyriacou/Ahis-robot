@@ -18,9 +18,23 @@ done
 "$PY" -c 'import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] <= (3,13) else 1)' || {
   echo "The voice model needs Python 3.10-3.13 in server/.venv. Recreate it with e.g. python3.12 -m venv server/.venv"; exit 1; }
 
-say "Installing the voice model software (CPU build of PyTorch)..."
-if [ "$(uname)" = "Linux" ] && ! "$PY" -c 'import torch' 2>/dev/null; then
-  "$SERVER/.venv/bin/pip" install -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+if [ "$(uname)" = "Linux" ]; then
+  if command -v nvidia-smi >/dev/null && nvidia-smi >/dev/null 2>&1; then
+    say "NVIDIA GPU found - installing the GPU build of PyTorch (much faster voice)..."
+    WANT=cuda
+  else
+    say "No NVIDIA GPU found - installing the CPU build of PyTorch (voice will be slow)..."
+    WANT=cpu
+  fi
+  HAVE="$("$PY" -c 'import torch; print("cuda" if torch.version.cuda else "cpu")' 2>/dev/null || echo none)"
+  if [ "$HAVE" != "$WANT" ]; then
+    if [ "$WANT" = cuda ]; then
+      "$SERVER/.venv/bin/pip" install -q --force-reinstall torch torchaudio
+    else
+      "$SERVER/.venv/bin/pip" install -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+    fi
+  fi
+  "$PY" -c 'import torch; print("PyTorch", torch.__version__, "- GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none")'
 fi
 "$SERVER/.venv/bin/pip" install -q -r "$SERVER/requirements-voice.txt"
 
